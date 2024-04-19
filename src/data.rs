@@ -1,7 +1,9 @@
 use std::{collections::HashMap, sync::Mutex};
 
+pub type Store = Mutex<HashMap<String, String>>;
+
 pub struct AppData {
-    pub store: Mutex<HashMap<String, String>>,
+    pub store: Store,
 }
 
 impl AppData {

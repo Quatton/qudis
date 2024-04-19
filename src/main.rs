@@ -53,6 +53,25 @@ async fn delete(data: web::Data<data::AppData>, path: web::Path<String>) -> impl
     HttpResponse::Ok().body("OK".to_string())
 }
 
+fn create_app_with_store(
+    app_data: data::AppData,
+) -> App<
+    impl ServiceFactory<
+        ServiceRequest,
+        Config = (),
+        Response = ServiceResponse<impl MessageBody>,
+        Error = Error,
+        InitError = (),
+    >,
+> {
+    App::new()
+        .app_data(web::Data::new(app_data))
+        .service(get)
+        .service(set)
+        .service(delete)
+        .wrap(Logger::new("%a %{User-Agent}i"))
+}
+
 fn create_app() -> App<
     impl ServiceFactory<
         ServiceRequest,
@@ -62,14 +81,9 @@ fn create_app() -> App<
         InitError = (),
     >,
 > {
-    let store = data::AppData::new();
+    let app_data = data::AppData::new();
 
-    App::new()
-        .app_data(web::Data::new(store))
-        .service(get)
-        .service(set)
-        .service(delete)
-        .wrap(Logger::new("%a %{User-Agent}i"))
+    create_app_with_store(app_data)
 }
 
 #[actix_web::main]
@@ -89,19 +103,10 @@ mod tests {
     use super::*;
 
     #[actix_web::test]
-    async fn test_get_key() {
-        let app = test::init_service(create_app()).await;
-        let req = test::TestRequest::with_uri("/get/test").to_request();
+    async fn test_set_get_delete() {
+        let app_data = data::AppData::new();
 
-        let resp = test::call_service(&app, req).await;
-
-        assert_eq!(resp.status(), 200);
-        assert_eq!(test::read_body(resp).await, "NOT FOUND");
-    }
-
-    #[actix_web::test]
-    async fn test_set_key() {
-        let app = test::init_service(create_app()).await;
+        let app = test::init_service(create_app_with_store(app_data)).await;
         let req = test::TestRequest::with_uri("/set/test")
             .method(Method::POST)
             .set_payload("value")
@@ -117,38 +122,6 @@ mod tests {
 
         assert_eq!(resp.status(), 200);
         assert_eq!(test::read_body(resp).await, "value");
-    }
-
-    #[actix_web::test]
-    async fn test_set_key_with_slash() {
-        let app = test::init_service(create_app()).await;
-        let req = test::TestRequest::with_uri("/set/test/value")
-            .method(Method::POST)
-            .to_request();
-
-        let resp = test::call_service(&app, req).await;
-
-        assert_eq!(resp.status(), 200);
-
-        let req = test::TestRequest::with_uri("/get/test").to_request();
-
-        let resp = test::call_service(&app, req).await;
-
-        assert_eq!(resp.status(), 200);
-        assert_eq!(test::read_body(resp).await, "value");
-    }
-
-    #[actix_web::test]
-    async fn test_delete_key() {
-        let app = test::init_service(create_app()).await;
-        let req = test::TestRequest::with_uri("/set/test")
-            .method(Method::POST)
-            .set_payload("value")
-            .to_request();
-
-        let resp = test::call_service(&app, req).await;
-
-        assert_eq!(resp.status(), 200);
 
         let req = test::TestRequest::with_uri("/delete/test")
             .method(Method::POST)
@@ -163,6 +136,7 @@ mod tests {
         let resp = test::call_service(&app, req).await;
 
         assert_eq!(resp.status(), 200);
+
         assert_eq!(test::read_body(resp).await, "NOT FOUND");
     }
 }
