@@ -45,6 +45,14 @@ async fn set(
     HttpResponse::Ok().body("OK".to_string())
 }
 
+#[post("/delete/{key}")]
+async fn delete(data: web::Data<data::AppData>, path: web::Path<String>) -> impl Responder {
+    let key = path.into_inner();
+    data.store.lock().unwrap().remove(&key);
+
+    HttpResponse::Ok().body("OK".to_string())
+}
+
 fn create_app() -> App<
     impl ServiceFactory<
         ServiceRequest,
@@ -60,6 +68,7 @@ fn create_app() -> App<
         .app_data(web::Data::new(store))
         .service(get)
         .service(set)
+        .service(delete)
         .wrap(Logger::new("%a %{User-Agent}i"))
 }
 
@@ -127,5 +136,33 @@ mod tests {
 
         assert_eq!(resp.status(), 200);
         assert_eq!(test::read_body(resp).await, "value");
+    }
+
+    #[actix_web::test]
+    async fn test_delete_key() {
+        let app = test::init_service(create_app()).await;
+        let req = test::TestRequest::with_uri("/set/test")
+            .method(Method::POST)
+            .set_payload("value")
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), 200);
+
+        let req = test::TestRequest::with_uri("/delete/test")
+            .method(Method::POST)
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), 200);
+
+        let req = test::TestRequest::with_uri("/get/test").to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(test::read_body(resp).await, "NOT FOUND");
     }
 }
