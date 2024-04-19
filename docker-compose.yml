@@ -1,0 +1,8 @@
+version: "3"
+services:
+  qudis-service:
+    image: qudis
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/home/workspace
