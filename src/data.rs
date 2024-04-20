@@ -29,12 +29,6 @@ impl AppData {
             client: Some(client),
         }
     }
-    pub fn new_test(store: Store) -> Self {
-        Self {
-            store: Mutex::new(store),
-            client: None,
-        }
-    }
 
     pub async fn start_scheduler(&self) {
         let schedule = every(1).hour().in_timezone(&Utc).perform(|| async {
@@ -91,6 +85,69 @@ impl AppData {
                     error!("Cannot read WAL");
                     Err(err.into())
                 }
+            }
+        } else {
+            warn!("Client is not available");
+            Ok(())
+        }
+    }
+
+    pub async fn download_wal(&self) -> Result<()> {
+        if let Some(client) = &self.client {
+            let resp = client
+                .get_object()
+                .bucket(BUCKET_NAME)
+                .key("wal.aof")
+                .send()
+                .await;
+
+            match create_dir(WAL_DIR) {
+                Ok(_) => (),
+                Err(err) => {
+                    if err.kind() != std::io::ErrorKind::AlreadyExists {
+                        error!("Cannot create directory");
+                        return Err(err);
+                    }
+                }
+            };
+
+            if let Ok(mut file) = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(WAL_PATH)
+            {
+                match resp {
+                    Ok(mut resp) => {
+                        while let Some(chunk) = resp.body.try_next().await? {
+                            file.write_all(&chunk)?;
+                        }
+
+                        info!("WAL downloaded");
+                        Ok(())
+                    }
+                    Err(SdkError::ServiceError(err)) => {
+                        let http = err.raw();
+                        error!("Cannot download WAL: {}", http.status());
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Cannot download WAL",
+                        ))
+                    }
+                    Err(_) => {
+                        error!("Cannot download WAL");
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Cannot download WAL",
+                        ))
+                    }
+                }
+            } else {
+                error!("Cannot create file");
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Cannot create file",
+                ))
             }
         } else {
             warn!("Client is not available");
@@ -156,17 +213,23 @@ const WAL_DIR: &str = ".data";
 const WAL_PATH: &str = ".data/wal.aof";
 const BUCKET_NAME: &str = "qudis-wal";
 
-pub fn append_wal(command: &str) -> Result<()> {
-    let path = Path::new(WAL_DIR);
+pub fn get_wal_file() -> Result<File> {
+    let path = Path::new(WAL_PATH);
 
     if !path.exists() {
-        create_dir(path)?;
+        create_dir(WAL_DIR)?;
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+    } else {
+        OpenOptions::new().append(true).open(path)
     }
+}
 
-    let mut file: File = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(WAL_PATH)?;
+pub fn append_wal(command: &str) -> Result<()> {
+    let mut file = get_wal_file()?;
 
     writeln!(file, "{}", command)?;
     Ok(())

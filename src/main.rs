@@ -1,100 +1,14 @@
+mod app;
 mod data;
 
 use std::sync::Arc;
 
-use actix_web::{
-    body::MessageBody,
-    dev::{ServiceFactory, ServiceRequest, ServiceResponse},
-    get,
-    middleware::Logger,
-    post,
-    rt::signal::{
-        self,
-        unix::{signal, SignalKind},
-    },
-    web, App, Error, Handler, HttpResponse, HttpServer, Responder,
-};
+use actix_web::rt::signal::unix::{signal, SignalKind};
+use actix_web::HttpServer;
+use app::create_app;
 use aws_sdk_s3::Client;
 use data::{load_wal, AppData};
-use log::info;
-
-use crate::data::append_wal;
-
-#[get("/get/{key}")]
-async fn get(data: web::Data<data::AppData>, path: web::Path<String>) -> impl Responder {
-    let key = path.into_inner();
-    match data.store.lock().unwrap().get(&key) {
-        Some(value) => HttpResponse::Ok().body(value.to_string()),
-        None => HttpResponse::Ok().body("NOT FOUND"),
-    }
-}
-
-#[post("/set/{tail:.*}")]
-async fn set(
-    data: web::Data<data::AppData>,
-    path: web::Path<String>,
-    body: web::Bytes,
-) -> impl Responder {
-    let path = path.into_inner();
-    let path_split = path.split('/').collect::<Vec<&str>>();
-
-    let key = path_split[0].to_string();
-    let value = if path_split.len() > 1 {
-        path_split[1].to_string()
-    } else {
-        let v = String::from_utf8(body.to_vec());
-
-        match v {
-            Ok(val) => val,
-            Err(_) => {
-                return HttpResponse::BadRequest().body("Invalid UTF-8 sequence");
-            }
-        }
-    };
-
-    data.store
-        .lock()
-        .unwrap()
-        .insert(key.clone(), value.clone());
-
-    info!("SET {} {}", key, value);
-    append_wal(&format!("SET {} {}", key, value)).expect("Failed to backup in log");
-
-    HttpResponse::Ok().body("OK".to_string())
-}
-
-#[post("/delete/{key}")]
-async fn delete(data: web::Data<data::AppData>, path: web::Path<String>) -> impl Responder {
-    let key = path.into_inner();
-    data.store.lock().unwrap().remove(&key);
-
-    HttpResponse::Ok().body("OK".to_string())
-}
-
-#[get("/")]
-async fn index() -> impl Responder {
-    HttpResponse::Ok().body("OK")
-}
-
-fn create_app(
-    app_data: Arc<data::AppData>,
-) -> App<
-    impl ServiceFactory<
-        ServiceRequest,
-        Config = (),
-        Response = ServiceResponse<impl MessageBody>,
-        Error = Error,
-        InitError = (),
-    >,
-> {
-    App::new()
-        .app_data(web::Data::new(app_data))
-        .service(index)
-        .service(get)
-        .service(set)
-        .service(delete)
-        .wrap(Logger::new("%a %{User-Agent}i"))
-}
+use log::{info, warn};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -106,6 +20,11 @@ async fn main() -> std::io::Result<()> {
     let db = load_wal()?;
     let client = Client::new(&shared_config);
     let app_data = Arc::new(AppData::new(db, client));
+
+    match app_data.download_wal().await {
+        Ok(_) => info!("Downloaded WAL"),
+        Err(e) => warn!("Failed to download WAL: {}", e),
+    }
 
     let term_app_data = app_data.clone();
 
@@ -145,7 +64,8 @@ async fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::{collections::HashMap, sync::Arc};
 
     use actix_web::{http::Method, test};
 
@@ -154,7 +74,10 @@ mod tests {
     #[actix_web::test]
     async fn test_set_get_delete() {
         let store = HashMap::new();
-        let app_data = Arc::new(data::AppData::new_test(store));
+        let app_data = Arc::new(data::AppData {
+            store: Mutex::new(store),
+            client: None,
+        });
 
         let app = test::init_service(create_app(app_data)).await;
         let req = test::TestRequest::with_uri("/set/test")
