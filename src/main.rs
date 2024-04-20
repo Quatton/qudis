@@ -7,6 +7,10 @@ use actix_web::{
     middleware::Logger,
     post, web, App, Error, HttpResponse, HttpServer, Responder,
 };
+use data::{load_wal, AppData};
+use log::info;
+
+use crate::data::append_wal;
 
 #[get("/get/{key}")]
 async fn get(data: web::Data<data::AppData>, path: web::Path<String>) -> impl Responder {
@@ -40,7 +44,13 @@ async fn set(
         }
     };
 
-    data.store.lock().unwrap().insert(key, value);
+    data.store
+        .lock()
+        .unwrap()
+        .insert(key.clone(), value.clone());
+
+    info!("SET {} {}", key, value);
+    append_wal(&format!("SET {} {}", key, value)).expect("Failed to backup in log");
 
     HttpResponse::Ok().body("OK".to_string())
 }
@@ -58,7 +68,7 @@ async fn index() -> impl Responder {
     HttpResponse::Ok().body("OK")
 }
 
-fn create_app_with_store(
+fn create_app(
     app_data: data::AppData,
 ) -> App<
     impl ServiceFactory<
@@ -78,25 +88,14 @@ fn create_app_with_store(
         .wrap(Logger::new("%a %{User-Agent}i"))
 }
 
-fn create_app() -> App<
-    impl ServiceFactory<
-        ServiceRequest,
-        Config = (),
-        Response = ServiceResponse<impl MessageBody>,
-        Error = Error,
-        InitError = (),
-    >,
-> {
-    let app_data = data::AppData::new();
-
-    create_app_with_store(app_data)
-}
-
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    dotenvy::dotenv().ok();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
-    HttpServer::new(create_app)
+    let db = load_wal()?;
+
+    HttpServer::new(move || create_app(AppData::new(db.clone())))
         .bind(("0.0.0.0", 8080))?
         .run()
         .await
@@ -104,15 +103,18 @@ async fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use actix_web::{http::Method, test};
 
     use super::*;
 
     #[actix_web::test]
     async fn test_set_get_delete() {
-        let app_data = data::AppData::new();
+        let store = HashMap::new();
+        let app_data = data::AppData::new(store);
 
-        let app = test::init_service(create_app_with_store(app_data)).await;
+        let app = test::init_service(create_app(app_data)).await;
         let req = test::TestRequest::with_uri("/set/test")
             .method(Method::POST)
             .set_payload("value")
