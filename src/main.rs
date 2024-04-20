@@ -63,7 +63,6 @@ async fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use app::create_test_app;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -74,12 +73,12 @@ mod tests {
     #[actix_web::test]
     async fn test_set_get_delete() {
         let store = HashMap::new();
-        let app_data = data::AppData {
+        let app_data = Arc::new(data::AppData {
             store: Mutex::new(store),
             client: None,
-        };
+        });
 
-        let app = test::init_service(create_test_app(app_data)).await;
+        let app = test::init_service(create_app(app_data)).await;
         let req = test::TestRequest::with_uri("/set/test")
             .method(Method::POST)
             .set_payload("value")

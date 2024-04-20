@@ -86,23 +86,3 @@ pub fn create_app(
         .service(delete)
         .wrap(Logger::new("%a %{User-Agent}i"))
 }
-
-pub fn create_test_app(
-    app_data: AppData,
-) -> App<
-    impl ServiceFactory<
-        ServiceRequest,
-        Config = (),
-        Response = ServiceResponse<impl MessageBody>,
-        Error = Error,
-        InitError = (),
-    >,
-> {
-    App::new()
-        .app_data(web::Data::new(app_data))
-        .service(index)
-        .service(get)
-        .service(set)
-        .service(delete)
-        .wrap(Logger::new("%a %{User-Agent}i"))
-}
