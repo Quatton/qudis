@@ -3,7 +3,7 @@ name: Deploy to AWS with Copilot
 on:
   push:
     branches:
-      - main
+      - master
 
 permissions:
   id-token: write
