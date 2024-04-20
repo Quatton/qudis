@@ -1,0 +1,1 @@
+export AWS_PROFILE=AdministratorAccess-603045522989
