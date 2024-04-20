@@ -53,6 +53,11 @@ async fn delete(data: web::Data<data::AppData>, path: web::Path<String>) -> impl
     HttpResponse::Ok().body("OK".to_string())
 }
 
+#[get("/")]
+async fn index() -> impl Responder {
+    HttpResponse::Ok().body("OK")
+}
+
 fn create_app_with_store(
     app_data: data::AppData,
 ) -> App<
@@ -66,6 +71,7 @@ fn create_app_with_store(
 > {
     App::new()
         .app_data(web::Data::new(app_data))
+        .service(index)
         .service(get)
         .service(set)
         .service(delete)

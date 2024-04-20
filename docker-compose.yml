@@ -2,13 +2,14 @@ version: "3.8"
 name: qudis
 services:
   server:
-    build: .
+    container_name: qudis-kv
+    image: quatton/qudis:latest
     ports:
       - "8080:8080"
     env_file:
       - .env
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/get/healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 5
