@@ -8,7 +8,7 @@ use actix_web::HttpServer;
 use app::create_app;
 use aws_sdk_s3::Client;
 use data::{load_wal, AppData};
-use log::{info, warn};
+use log::info;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -21,9 +21,8 @@ async fn main() -> std::io::Result<()> {
     let client = Client::new(&shared_config);
     let app_data = Arc::new(AppData::new(db, client));
 
-    match app_data.download_wal().await {
-        Ok(_) => info!("Downloaded WAL"),
-        Err(e) => warn!("Failed to download WAL: {}", e),
+    if app_data.download_wal().await.is_ok() {
+        info!("Downloaded WAL")
     }
 
     let term_app_data = app_data.clone();
@@ -64,8 +63,9 @@ async fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use app::create_test_app;
+    use std::collections::HashMap;
     use std::sync::Mutex;
-    use std::{collections::HashMap, sync::Arc};
 
     use actix_web::{http::Method, test};
 
@@ -74,12 +74,12 @@ mod tests {
     #[actix_web::test]
     async fn test_set_get_delete() {
         let store = HashMap::new();
-        let app_data = Arc::new(data::AppData {
+        let app_data = data::AppData {
             store: Mutex::new(store),
             client: None,
-        });
+        };
 
-        let app = test::init_service(create_app(app_data)).await;
+        let app = test::init_service(create_test_app(app_data)).await;
         let req = test::TestRequest::with_uri("/set/test")
             .method(Method::POST)
             .set_payload("value")

@@ -12,7 +12,7 @@ use actix_web::{
 use log::info;
 
 #[get("/get/{key}")]
-async fn get(data: web::Data<AppData>, path: web::Path<String>) -> impl Responder {
+async fn get(data: web::Data<Arc<AppData>>, path: web::Path<String>) -> impl Responder {
     let key = path.into_inner();
     match data.store.lock().unwrap().get(&key) {
         Some(value) => HttpResponse::Ok().body(value.to_string()),
@@ -22,7 +22,7 @@ async fn get(data: web::Data<AppData>, path: web::Path<String>) -> impl Responde
 
 #[post("/set/{tail:.*}")]
 async fn set(
-    data: web::Data<AppData>,
+    data: web::Data<Arc<AppData>>,
     path: web::Path<String>,
     body: web::Bytes,
 ) -> impl Responder {
@@ -55,7 +55,7 @@ async fn set(
 }
 
 #[post("/delete/{key}")]
-async fn delete(data: web::Data<AppData>, path: web::Path<String>) -> impl Responder {
+async fn delete(data: web::Data<Arc<AppData>>, path: web::Path<String>) -> impl Responder {
     let key = path.into_inner();
     data.store.lock().unwrap().remove(&key);
 
@@ -69,6 +69,26 @@ async fn index() -> impl Responder {
 
 pub fn create_app(
     app_data: Arc<AppData>,
+) -> App<
+    impl ServiceFactory<
+        ServiceRequest,
+        Config = (),
+        Response = ServiceResponse<impl MessageBody>,
+        Error = Error,
+        InitError = (),
+    >,
+> {
+    App::new()
+        .app_data(web::Data::new(app_data))
+        .service(index)
+        .service(get)
+        .service(set)
+        .service(delete)
+        .wrap(Logger::new("%a %{User-Agent}i"))
+}
+
+pub fn create_test_app(
+    app_data: AppData,
 ) -> App<
     impl ServiceFactory<
         ServiceRequest,
