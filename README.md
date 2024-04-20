@@ -26,7 +26,7 @@
   - The profile name is `AdministratorAccess-603045522989` (I hope this is not a secret?)
   - If I want to access the CLI on behalf of this profile I export the environment variable `export AWS_PROFILE=AdministratorAccess-603045522989`
 
-- [ ] `copilot init`
+- [x] `copilot init` & `copilot deploy`
 
   - I used `Load Balanced Web Service` on `Fargate`
   - Why? Because it's serverless and should support REST
@@ -43,3 +43,4 @@
   - Taking quite a while to be honest. (~7 min)
 
 - [ ] Figure out how to persist state even though it's a serverless?
+  - [ ] S3 with .data/wal.aof snapshot

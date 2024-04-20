@@ -1,12 +1,20 @@
 mod data;
 
+use std::sync::Arc;
+
 use actix_web::{
     body::MessageBody,
     dev::{ServiceFactory, ServiceRequest, ServiceResponse},
     get,
     middleware::Logger,
-    post, web, App, Error, HttpResponse, HttpServer, Responder,
+    post,
+    rt::signal::{
+        self,
+        unix::{signal, SignalKind},
+    },
+    web, App, Error, Handler, HttpResponse, HttpServer, Responder,
 };
+use aws_sdk_s3::Client;
 use data::{load_wal, AppData};
 use log::info;
 
@@ -69,7 +77,7 @@ async fn index() -> impl Responder {
 }
 
 fn create_app(
-    app_data: data::AppData,
+    app_data: Arc<data::AppData>,
 ) -> App<
     impl ServiceFactory<
         ServiceRequest,
@@ -93,12 +101,46 @@ async fn main() -> std::io::Result<()> {
     dotenvy::dotenv().ok();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
-    let db = load_wal()?;
+    let shared_config = aws_config::from_env().load().await;
 
-    HttpServer::new(move || create_app(AppData::new(db.clone())))
+    let db = load_wal()?;
+    let client = Client::new(&shared_config);
+    let app_data = Arc::new(AppData::new(db, client));
+
+    let term_app_data = app_data.clone();
+
+    let scheduler_data = app_data.clone();
+
+    let server = HttpServer::new(move || create_app(app_data.clone()))
         .bind(("0.0.0.0", 8080))?
-        .run()
-        .await
+        .disable_signals()
+        .run();
+
+    let term_handler = server.handle().clone();
+
+    tokio::spawn(async move {
+        scheduler_data.start_scheduler().await;
+    });
+
+    tokio::spawn(async move {
+        let mut term = signal(SignalKind::terminate()).unwrap();
+        let mut int = signal(SignalKind::interrupt()).unwrap();
+
+        tokio::select! {
+            _ = term.recv() => {
+                info!("Forcing shutdown");
+            }
+            _ = int.recv() => {
+                info!("Forcing shutdown");
+            }
+        }
+
+        let _ = term_app_data.upload_wal().await;
+
+        term_handler.stop(true).await
+    });
+
+    server.await
 }
 
 #[cfg(test)]
@@ -112,7 +154,7 @@ mod tests {
     #[actix_web::test]
     async fn test_set_get_delete() {
         let store = HashMap::new();
-        let app_data = data::AppData::new(store);
+        let app_data = Arc::new(data::AppData::new_test(store));
 
         let app = test::init_service(create_app(app_data)).await;
         let req = test::TestRequest::with_uri("/set/test")
