@@ -2,7 +2,7 @@
 ## build stage ##
 #################
 
-FROM rust:1-slim-bookworm AS builder
+FROM --platform=linux/amd64 rust:1-slim-bookworm AS builder
 WORKDIR /code
 
 # Download crates-io index and fetch dependency code.
@@ -22,7 +22,7 @@ RUN cargo build --release
 ## run stage ##
 #################
 
-FROM debian:bookworm-slim AS runner
+FROM --platform=linux/amd64 debian:bookworm-slim AS runner
 WORKDIR /app
 
 # install curl
