@@ -18,11 +18,21 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 #[get("/get/{key}")]
-async fn get(data: web::Data<Arc<AppData>>, path: web::Path<String>) -> impl Responder {
-    let key = path.into_inner();
-    match data.store.lock().unwrap().get(&key) {
-        Some(value) => HttpResponse::Ok().body(value.to_string()),
-        None => HttpResponse::Ok().body("NOT FOUND"),
+async fn get(
+    data: web::Data<Arc<AppData>>,
+    path: web::Path<String>,
+    auth: web::Data<Auth>,
+    credentials: BearerAuth,
+) -> impl Responder {
+    match validate_token(credentials, &auth.secret) {
+        Ok(user_id) => {
+            let key = format!("{}:{}", user_id, path.into_inner());
+            match data.store.lock().unwrap().get(&key) {
+                Some(value) => HttpResponse::Ok().body(value.to_string()),
+                None => HttpResponse::Ok().body("NOT FOUND"),
+            }
+        }
+        _ => HttpResponse::Unauthorized().finish(),
     }
 }
 
@@ -30,42 +40,59 @@ async fn get(data: web::Data<Arc<AppData>>, path: web::Path<String>) -> impl Res
 async fn set(
     data: web::Data<Arc<AppData>>,
     path: web::Path<String>,
+    auth: web::Data<Auth>,
+    credentials: BearerAuth,
     body: web::Bytes,
 ) -> impl Responder {
-    let path = path.into_inner();
-    let path_split = path.split('/').collect::<Vec<&str>>();
+    match validate_token(credentials, &auth.secret) {
+        Ok(user_id) => {
+            let path = path.into_inner();
+            let path_split = path.split('/').collect::<Vec<&str>>();
 
-    let key = path_split[0].to_string();
-    let value = if path_split.len() > 1 {
-        path_split[1].to_string()
-    } else {
-        let v = String::from_utf8(body.to_vec());
+            let key = format!("{}:{}", user_id, path_split[0]);
+            let value = if path_split.len() > 1 {
+                path_split[1].to_string()
+            } else {
+                let v = String::from_utf8(body.to_vec());
 
-        match v {
-            Ok(val) => val,
-            Err(_) => {
-                return HttpResponse::BadRequest().body("Invalid UTF-8 sequence");
-            }
+                match v {
+                    Ok(val) => val,
+                    Err(_) => {
+                        return HttpResponse::BadRequest().body("Invalid UTF-8 sequence");
+                    }
+                }
+            };
+
+            data.store
+                .lock()
+                .unwrap()
+                .insert(key.clone(), value.clone());
+
+            info!("SET {} {}", key, value);
+            append_wal(&format!("SET {} {}", key, value)).expect("Failed to backup in log");
+
+            HttpResponse::Ok().body("OK".to_string())
         }
-    };
-
-    data.store
-        .lock()
-        .unwrap()
-        .insert(key.clone(), value.clone());
-
-    info!("SET {} {}", key, value);
-    append_wal(&format!("SET {} {}", key, value)).expect("Failed to backup in log");
-
-    HttpResponse::Ok().body("OK".to_string())
+        _ => HttpResponse::Unauthorized().finish(),
+    }
 }
 
 #[post("/delete/{key}")]
-async fn delete(data: web::Data<Arc<AppData>>, path: web::Path<String>) -> impl Responder {
-    let key = path.into_inner();
-    data.store.lock().unwrap().remove(&key);
+async fn delete(
+    data: web::Data<Arc<AppData>>,
+    path: web::Path<String>,
+    auth: web::Data<Auth>,
+    credentials: BearerAuth,
+) -> impl Responder {
+    match validate_token(credentials, &auth.secret) {
+        Ok(user_id) => {
+            let key = format!("{}:{}", user_id, path.into_inner());
+            data.store.lock().unwrap().remove(&key);
 
-    HttpResponse::Ok().body("OK".to_string())
+            HttpResponse::Ok().body("OK".to_string())
+        }
+        _ => HttpResponse::Unauthorized().finish(),
+    }
 }
 
 #[get("/")]
@@ -89,7 +116,7 @@ fn create_user_id(username: &str) -> String {
     let mut hasher = Sha256::default();
     hasher.update(username.as_bytes());
     let result = hasher.finalize();
-    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &result)
+    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, result)
 }
 
 #[get("/auth/issue-token")]
@@ -117,7 +144,34 @@ async fn issue_token(info: web::Query<Info>, auth: web::Data<Auth>) -> impl Resp
     HttpResponse::Ok().body(token)
 }
 
-async fn validate(
+fn validate_token(credentials: BearerAuth, secret: &str) -> Result<String, Error> {
+    match jsonwebtoken::decode::<Claims>(
+        credentials.token(),
+        &DecodingKey::from_secret(secret.as_ref()),
+        &jsonwebtoken::Validation::default(),
+    ) {
+        Ok(token) => {
+            let user_id = create_user_id(&token.claims.username);
+
+            // Check if the user_id is the same as the sub
+
+            if user_id == token.claims.sub {
+                return Ok(user_id);
+            }
+
+            Err(ErrorForbidden(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Forbidden",
+            )))
+        }
+        Err(_) => Err(ErrorForbidden(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Forbidden",
+        ))),
+    }
+}
+
+async fn validator(
     req: ServiceRequest,
     credentials: BearerAuth,
 ) -> Result<ServiceRequest, (Error, ServiceRequest)> {
@@ -133,29 +187,9 @@ async fn validate(
         ));
     }
 
-    match jsonwebtoken::decode::<Claims>(
-        credentials.token(),
-        &DecodingKey::from_secret(secret.as_ref()),
-        &jsonwebtoken::Validation::default(),
-    ) {
-        Ok(token) => {
-            let user_id = create_user_id(&token.claims.username);
-
-            // Check if the user_id is the same as the sub
-
-            if user_id == token.claims.sub {
-                return Ok(req);
-            }
-
-            Err((
-                ErrorForbidden(std::io::Error::new(std::io::ErrorKind::Other, "Forbidden")),
-                req,
-            ))
-        }
-        Err(_) => Err((
-            ErrorForbidden(std::io::Error::new(std::io::ErrorKind::Other, "Forbidden")),
-            req,
-        )),
+    match validate_token(credentials, &secret) {
+        Ok(_) => Ok(req),
+        Err(e) => Err((e, req)),
     }
 }
 
@@ -183,7 +217,7 @@ pub fn create_app(
         .service(issue_token)
         .service(
             web::scope("")
-                .wrap(HttpAuthentication::bearer(validate))
+                .wrap(HttpAuthentication::bearer(validator))
                 .service(get)
                 .service(set)
                 .service(delete),
