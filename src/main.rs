@@ -21,7 +21,9 @@ async fn main() -> std::io::Result<()> {
     let client = Client::new(&shared_config);
     let app_data = Arc::new(AppData::new(db, client));
 
-    if app_data.download_wal().await.is_ok() {
+    if std::env::var("DEV").unwrap_or("false".to_string()) == "false"
+        && app_data.download_wal().await.is_ok()
+    {
         info!("Downloaded WAL")
     }
 
@@ -36,6 +38,7 @@ async fn main() -> std::io::Result<()> {
 
     let term_handler = server.handle().clone();
 
+    // This scheduler will be used to upload the WAL file to S3
     tokio::spawn(async move {
         scheduler_data.start_scheduler().await;
     });
